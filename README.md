@@ -10,8 +10,8 @@
 |---|---|---|
 | 候选窗口 | 始终显示 | 可用 `style/show_candidate_window: false` 关闭 |
 | 关闭后看候选 | — | 按 <kbd>Tab</kbd> 在内嵌预编辑里逐个预览 |
-| 出厂方案 | 12 个 | 只有小鹤双拼 |
-| 出厂皮肤 | 30 多个 | 只有「微信配色」 |
+| 出厂方案 | 一整套 | 只有小鹤双拼 |
+| 出厂皮肤 | 36 个 | 只有「微信配色」 |
 
 涉及 5 个文件（+147 / −7），改动只在服务端与面板层，**没有动 IPC 数据结构**，所以新旧进程混跑不会抛 `archive_exception`：
 
@@ -49,7 +49,7 @@ patch:
 
 | 键 | 取值 | 作用 |
 |---|---|---|
-| `style/show_candidate_window` | `true` / `false` | 是否向客户端下发候选列表。设为 `false` 时候选窗不弹，但方案选单（<kbd>Ctrl+&#96;</kbd> / <kbd>F4</kbd>）照常显示 —— 服务端对 switcher 单独放行 |
+| `style/show_candidate_window` | `true` / `false` | 是否向客户端下发候选列表。设为 `false` 时候选窗不弹，但方案选单（<kbd>Ctrl+&#96;</kbd> / <kbd>Ctrl+Shift+&#96;</kbd>）照常显示 —— 服务端对 switcher 单独放行 |
 | `style/inline_preedit` | `true` / `false` | 预编辑画在输入框内，还是另起一行 |
 | `style/preedit_type` | `composition` / `preview` / `preview_all` | 内嵌预编辑显示的内容 |
 
@@ -78,7 +78,7 @@ Tab 预览目前没有配置开关。不想要就回退提交 `17e2dd1`。
 
 ## 三、安装包与出厂默认
 
-Releases 里的安装包在官方 `install.nsi` 基础上换了出厂配置：
+安装包在 [Releases](https://github.com/BI1XVY/weasel/releases/latest) 里，基于官方 `install.nsi`，只换了出厂配置：
 
 | 项 | 值 |
 |---|---|
@@ -92,6 +92,8 @@ Releases 里的安装包在官方 `install.nsi` 基础上换了出厂配置：
 安装包用自签名证书（`CN=Dongda Weasel Custom`）签名。**自签名只对本机或已导入证书的机器有效**，别人下载后仍会提示「未知发布者」，需先导入 `certs/weasel-custom.cer` 到「受信任的根证书颁发机构」。
 
 > 升级安装不会覆盖 `%APPDATA%\Rime`。如果那份用户配置来自旧版（比如「薄荷」全套 7 个方案、30 多个皮肤），部署时会按旧的用户配置重新编译，方案和配色又会变多。处理办法是用安装目录 `data\weasel.yaml`、`data\default.yaml` 覆盖用户目录的同名文件，再重新部署。
+>
+> 覆盖 `default.yaml` 前先确认里面有 `switcher:` 段 —— <kbd>Ctrl+&#96;</kbd> 的热键只在那里注册。本仓库的安装包从 `custom-data/default.yaml` 生成，一定带该段；但更早的包可能只有 `schema_list` 七行，拿它覆盖会让方案选单彻底没反应。
 
 ## 四、从源码构建
 
