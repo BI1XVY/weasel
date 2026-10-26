@@ -23,6 +23,11 @@ class UIImpl {
   void Show() {
     if (!panel.IsWindow())
       return;
+    // _UpdateHideCandidates 判定没有内容可画时不要再显示，否则会留下空窗口
+    if (!panel.WantsToBeVisible()) {
+      Hide();
+      return;
+    }
     panel.ShowWindow(SW_SHOWNA);
   }
   void Hide() {

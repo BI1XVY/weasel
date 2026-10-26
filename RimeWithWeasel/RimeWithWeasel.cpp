@@ -60,6 +60,19 @@ RimeWithWeaselHandler::~RimeWithWeaselHandler() {
 }
 
 bool add_session = false;
+
+// style/show_candidate_window：是否向客户端下发候选列表。
+// 该开关只存在于服务端，不放进 UIStyle —— 一旦改动 UIStyle 的字段，
+// boost 文本归档的字段数就会变化，新旧客户端混跑时会抛
+// "boost::archive::archive_exception: input stream error"。
+// 这里改为「服务端不下发候选」，协议保持上游原样。
+static bool g_show_candidate_window = true;
+
+// 按 Tab 才把内嵌预编辑从「编码」切成「高亮候选文本」。
+// 默认 false —— 打字时显示拼音，与 preedit_type: composition 一致。
+// 只改 ctx.preedit 的内容，不碰 IPC 结构；组合结束（上屏/取消）自动复位。
+static bool g_preedit_preview = false;
+
 void _UpdateUIStyle(RimeConfig* config, UI* ui, bool initialize);
 bool _UpdateUIStyleColor(RimeConfig* config,
                          UIStyle& style,
@@ -271,6 +284,36 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   if (m_disabled)
     return FALSE;
   RimeSessionId session_id = to_session_id(ipc_id);
+
+  // Tab 全权接管（不依赖 key_binder 的 Tab 绑定 —— 那条规则会和自带的
+  // Tab→Shift+Right 抢匹配顺序，实测会被遮蔽成「移动分词」）：
+  //   首次按下 —— 只切到「预览高亮候选」，不动高亮，看到的是当前（第一个）候选；
+  //   之后再按 —— 直接送 Down 给 librime，逐个往后。
+  // Ctrl/Shift+Tab 不拦，留给系统和方案自己处理。
+  const bool tab_key_down = !(keyEvent.mask & ibus::Modifier::RELEASE_MASK);
+  if (tab_key_down && keyEvent.keycode == ibus::Keycode::Tab &&
+      !(keyEvent.mask &
+        (ibus::Modifier::CONTROL_MASK | ibus::Modifier::SHIFT_MASK))) {
+    RIME_STRUCT(RimeStatus, composing_status);
+    bool composing = false;
+    if (rime_api->get_status(session_id, &composing_status)) {
+      composing = !!composing_status.is_composing;
+      rime_api->free_status(&composing_status);
+    }
+    if (composing) {
+      if (g_preedit_preview) {
+        // 已在预览态：Tab 等价于 ↓
+        rime_api->process_key(session_id, ibus::Keycode::Down, 0);
+      } else {
+        g_preedit_preview = true;  // 先看清当前候选，不跳
+      }
+      _Respond(ipc_id, eat);
+      _UpdateUI(ipc_id);
+      m_active_session = ipc_id;
+      return TRUE;
+    }
+  }
+
   Bool handled = rime_api->process_key(session_id, keyEvent.keycode,
                                        expand_ibus_modifier(keyEvent.mask));
   // vim_mode when keydown only
@@ -762,10 +805,13 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
   }
 
   bool is_composing = false;
+  std::string cur_schema_id;
   RIME_STRUCT(RimeStatus, status);
   static const std::wstring Bool_wstring[] = {L"0", L"1"};
   if (rime_api->get_status(session_id, &status)) {
     is_composing = !!status.is_composing;
+    if (status.schema_id)
+      cur_schema_id = status.schema_id;
     actions.push_back("status");
     body.append(L"status.ascii_mode=")
         .append(Bool_wstring[!!status.is_ascii_mode])
@@ -793,6 +839,10 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     session_status.status = status;
     rime_api->free_status(&status);
   }
+
+  // 组合结束（上屏 / 取消 / Esc）：退出预览态，下次打字重新从编码看起
+  if (!is_composing)
+    g_preedit_preview = false;
 
   RIME_STRUCT(RimeContext, ctx);
   if (rime_api->get_context(session_id, &ctx)) {
@@ -832,10 +882,34 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
           // no preview, fall back to composition
         }
         case UIStyle::COMPOSITION: {
+          // 预览态：把编码换成当前高亮候选的文本。只在按过 Tab 后生效；
+          // 排除方案选单（schema_id ".default"）与空输入，避免顶掉菜单标题。
+          std::wstring display_w = preedit ? u8tow(preedit) : std::wstring();
+          bool previewing = false;
+          if (g_preedit_preview && cur_schema_id != ".default" &&
+              ctx.composition.length > 0 && has_candidates) {
+            const int idx = ctx.menu.highlighted_candidate_index;
+            if (idx >= 0 && idx < ctx.menu.num_candidates &&
+                ctx.menu.candidates[idx].text &&
+                *ctx.menu.candidates[idx].text) {
+              display_w = u8tow(ctx.menu.candidates[idx].text);
+              previewing = true;
+            }
+          }
           body.append(L"ctx.preedit=")
-              .append(escape_string(u8tow(preedit)))
+              .append(escape_string(display_w))
               .append(L"\n");
-          if (start <= end) {
+          if (previewing) {
+            // 换成候选词后整串无选区，三段光标都放末尾
+            const std::wstring tail = std::to_wstring(display_w.length());
+            body.append(L"ctx.preedit.cursor=")
+                .append(tail)
+                .append(L",")
+                .append(tail)
+                .append(L",")
+                .append(tail)
+                .append(L"\n");
+          } else if (start <= end) {
             body.append(L"ctx.preedit.cursor=")
                 .append(u8towstring(preedit, start))
                 .append(L",")
@@ -891,7 +965,36 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
         }
       }
     }
-    if (has_candidates) {
+    // 关闭候选窗时不发 ctx.cand，客户端拿不到候选数据，面板只会排
+    // 预编辑/提示；两者都为空时由 WeaselPanel 收起窗口。
+    //
+    // 例外：方案选单（switcher）的候选与正常输入共用 menu，若一并拦掉
+    // 就只剩标题、无法选择，故必须放行。识别选单用两个条件之一：
+    //   1. schema_id 为 ".default"（客户端 _UpdateHideCandidates 亦用此判据）
+    //   2. 无输入（length == 0）但预编辑非空 —— switcher 只塞一个 (0,0)
+    //      空片段承载标题，见 librime switcher.cc RefreshMenu()
+    const bool has_preedit =
+        ctx.composition.preedit && *ctx.composition.preedit;
+    const bool is_schema_switcher =
+        (cur_schema_id == ".default") ||
+        (ctx.composition.length == 0 && has_preedit);
+    const bool send_candidates =
+        has_candidates && (g_show_candidate_window || is_schema_switcher);
+    if (has_candidates && !send_candidates) {
+      // 抑制时按签名变化记录，避免每次按键刷日志
+      static std::string last_signature;
+      std::string signature = cur_schema_id + "|" +
+                              std::to_string(ctx.composition.length) + "|" +
+                              std::to_string(ctx.menu.num_candidates);
+      if (last_signature != signature) {
+        last_signature = signature;
+        LOG(INFO) << "candidates suppressed: schema_id=" << cur_schema_id
+                  << " composition_length=" << ctx.composition.length
+                  << " candidates=" << ctx.menu.num_candidates
+                  << " preedit=" << (has_preedit ? ctx.composition.preedit : "");
+      }
+    }
+    if (send_candidates) {
       std::wstringstream ss;
       boost::archive::text_woarchive oa(ss);
 
@@ -1153,6 +1256,10 @@ void LoadWeaselUIStyle(RimeConfig* config,
                  style.candidate_abbreviate_length, 0, 0, _abs);
   _RimeGetBool(config, "style/inline_preedit", initialize,
                style.inline_preedit);
+  // 缺省为 true：不配置时保持候选窗口可见。
+  // 传 false 作为 cond：配置项缺失时保留已有值，支持方案级覆盖。
+  _RimeGetBool(config, "style/show_candidate_window", false,
+               g_show_candidate_window);
   _RimeGetBool(config, "style/vertical_auto_reverse", initialize,
                style.vertical_auto_reverse);
   static constexpr Array<UIStyle::PreeditType, 3> _preeditArr = {

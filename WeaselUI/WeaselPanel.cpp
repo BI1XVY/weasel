@@ -293,8 +293,14 @@ void WeaselPanel::_UpdateHideCandidates() {
   // 2. inline preedit without candidates
   bool inline_no_candidates =
       (m_style.inline_preedit && m_candidateCount == 0) && !show_tips;
+  // 没有候选、没有预编辑、也没有提示消息时，窗口里其实没有任何可绘制内容。
+  // 这种状态下布局仍会单独画出状态图标，而没取到光标位置时窗口会停在屏幕
+  // 左上角，留下一个带滚动条的小空窗，所以直接按「需要隐藏」处理。
+  bool nothing_to_draw = m_candidateCount == 0 && m_ctx.preedit.empty() &&
+                         m_ctx.aux.empty() && !show_schema_menu;
   hide_candidates = inline_no_candidates ||
-                    (margin_negative && !show_tips && !show_schema_menu);
+                    (margin_negative && !show_tips && !show_schema_menu) ||
+                    nothing_to_draw;
 }
 
 void WeaselPanel::Refresh() {

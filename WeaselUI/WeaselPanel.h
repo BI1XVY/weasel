@@ -31,6 +31,8 @@ class WeaselPanel {
   BOOL Create(HWND parent, bool preview_mode = false);
   void SetPreviewMode(bool enabled) { m_preview_mode = enabled; }
   bool GetIsReposition() { return m_istorepos; }
+  // 面板当前是否有内容需要显示；false 时 UI::Show() 不应把窗口弹出来
+  bool WantsToBeVisible() const { return !hide_candidates; }
 
   static const int AUTOREV_TIMER = 20241209;
   static const int AUTOHIDE_TIMER = 20241107;
