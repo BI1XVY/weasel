@@ -10,7 +10,7 @@
 |---|---|---|
 | 候选窗口 | 始终显示 | 可用 `style/show_candidate_window: false` 关闭 |
 | 关闭后看候选 | — | 按 <kbd>Tab</kbd> 在内嵌预编辑里逐个预览 |
-| 出厂方案 | 一整套 | 只有小鹤双拼 |
+| 出厂方案 | 一整套（13 个 `.schema.yaml`） | 只有小鹤双拼 |
 | 出厂皮肤 | 36 个 | 只有「微信配色」 |
 
 涉及 5 个文件（+147 / −7），改动只在服务端与面板层，**没有动 IPC 数据结构**，所以新旧进程混跑不会抛 `archive_exception`：
@@ -88,6 +88,19 @@ Tab 预览目前没有配置开关。不想要就回退提交 `17e2dd1`。
 | 预编辑 | 内嵌、显示编码、输出简体 |
 
 配色主色 `0x76B100`（ABGR，即 `#00B176` 微信绿）。
+
+### 「输入法设定」里为什么会出现别的输入法
+
+小狼毫的「输入法设定」列的不是 `default.yaml` 里的 `schema_list`，而是 librime 在数据目录里扫到的**全部** `*.schema.yaml` —— 没启用的也会列出来，只是不打勾。所以只把 `schema_list` 收窄成一个方案，对话框里依然会看到朙月拼音、仓颉、注音等十来项。
+
+本仓库的打包流程直接从 `data` 里删掉其余方案文件，只留 `double_pinyin_flypy.schema.yaml` 和它需要的 `luna_pinyin.dict.yaml`，并断言目录里只剩一个 `*.schema.yaml`。
+
+还有两处连带处理：
+
+- 升级安装时 `install.nsi` 会把上一版 `data` 整目录备份再恢复回来，旧方案不会被新包覆盖。所以编译前在恢复之后插了一步 `Delete $INSTDIR\data\*.schema.yaml`。
+- 小鹤方案原本 `dependencies: - stroke`、`reverse_lookup` 走笔画反查，会把「筆畫」也带进列表。本仓库的版本去掉了这两处引用（代价是 <kbd>&#96;</kbd> 打头的笔画反查不可用，其余功能不受影响）。
+
+如果某台机器上仍然看到多个方案，多半是 `%APPDATA%\Rime` 里留着旧发行版的方案文件。清法是：把该目录下除 `double_pinyin_flypy.schema.yaml` 以外的 `*.schema.yaml` 移走，删掉 `build` 目录，再执行一次「重新部署」。
 
 安装包用自签名证书（`CN=Dongda Weasel Custom`）签名。**自签名只对本机或已导入证书的机器有效**，别人下载后仍会提示「未知发布者」，需先导入 `certs/weasel-custom.cer` 到「受信任的根证书颁发机构」。
 
